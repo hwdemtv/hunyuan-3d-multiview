@@ -1,0 +1,105 @@
+# Hunyuan 3D Multiview · 混元多视角图生 3D 工作流
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20WorkBuddy-lightgrey)](#环境要求)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-green)](#环境要求)
+[![Model](https://img.shields.io/badge/Model-Tencent%20Hunyuan3D%203.1-orange)](https://cloud.tencent.com/document/product/1770)
+
+**A WorkBuddy agent skill for image-to-3D generation with multi-view inputs (front + back + left/right) — powered by Tencent Hunyuan3D (混元生3D), fully Base64, no image hosting required.**
+
+一个 [WorkBuddy](https://www.workbuddy.cn) 智能体技能：把三视图 / 多视角图片变成可下载的 **3D 手办模型（GLB / OBJ，含 PBR 材质）**，走腾讯混元生 3D（SubmitHunyuanTo3DProJob）官方 API。核心亮点：**多视角图片全程走 `ViewImageBase64` 字段直连，无需公网图床**——这是 WorkBuddy 内置 `buddy-cloud.py` 不支持的能力。
+
+![单图 vs 多视角生成效果对比](assets/comparison.png)
+
+## ✨ 特性 / Features
+
+- 🖼️ **多视角输入**：front 主图 + `back` / `left` / `right`（3.1 版本还支持 `top` / `bottom` / `left_front` / `right_front` 八视图），背面与侧面细节不再靠 AI"猜"
+- 🔐 **免图床**：所有视角图以 Base64 内嵌请求体（官方 `ViewImageBase64` 字段），本地图直接用
+- 📦 **标准产物**：GLB（50MB 级，含 PBR 贴图）+ OBJ + 渲染预览图，可直接导入 Blender / Fusion 360 / 3D 打印切片
+- 🖥️ **内置预览**：自动生成 [model-viewer](https://modelviewer.dev/) 交互预览页（旋转 / 缩放 / 自动旋转）
+- 🔁 **健壮轮询**：任务提交后自动轮询（5s 间隔，最长 600s），Token 全程 stdin 传递、输出自动脱敏
+
+## 📊 实测数据（单图 vs 多视角）
+
+| 指标 | 单图模式 | 多视角模式 |
+|------|---------|-----------|
+| 输入 | 仅正视图 | 正视图（主图）+ 后视图 + 左视图 |
+| 耗时 | ~3.5 min | ~6 min |
+| 消耗 | 30 点（Normal 20 + PBR 10） | 40 点（Normal 20 + **MultiView 10** + PBR 10） |
+| 背面还原度 | 依赖模型推断 | 按输入视图精确还原 |
+
+## 🚀 快速开始 / Quick Start
+
+### 1. 环境要求
+
+- Python 3.10+（含 `requests`，脚本所在 WorkBuddy 环境已内置）
+- WorkBuddy Desktop（提供 `connect_cloud_service` 临时凭证与 `buddy-cloud.py` 签名通道）
+- 一个三视图 / 多视角图片（正 / 后 / 左各占约 1/3 宽度，白底最佳）
+
+### 2. 安装技能
+
+把本仓库的 `SKILL.md` 与 `scripts/` 复制到技能目录：
+
+```bash
+# 用户级（跨项目可用）
+mkdir -p ~/.workbuddy/skills/hunyuan-3d-multiview
+cp SKILL.md ~/.workbuddy/skills/hunyuan-3d-multiview/
+cp -r scripts ~/.workbuddy/skills/hunyuan-3d-multiview/
+```
+
+### 3. 裁剪视角图
+
+从整张三视图里按 1/3 宽度裁出 `front` / `back` / `left`（去掉底部文字标注），用 PIL 存为 jpg（quality 92，单边 ≥128px，多视角 base64 总和 ≤6MB）。
+
+### 4. 一条命令生成
+
+```bash
+echo -n "<tempToken>" | python scripts/multiview_3d_driver.py \
+    --front view_front.jpg --back view_back.jpg --left view_left.jpg \
+    --model 3.1 --pbr
+```
+
+- `<tempToken>`：由 WorkBuddy 的 `connect_cloud_service` 工具返回（**不要**把 Token 写进命令行参数、环境变量或文件）
+- 输出 JSON：`job_id` / `status` / `credit_consumed` / `result_files`（glb、obj 的下载 URL 与预览图）
+- 生成期间脚本自动轮询；若中断可用 `buddy-cloud.py status <job_id> --type 3d` 续查，**不要重复提交**（同一请求最多重提 1 次）
+
+### 5. 下载 + 预览
+
+下载 `result_files` 中的 GLB 与 `preview_image_url`，再生成一个 `model-viewer` 预览页（`src` 用相对路径引用同目录 GLB），放在 WorkBuddy 内置预览或任意静态服务器即可 360° 查看。
+
+## 🧠 为什么多视角 + Base64？
+
+- 混元生 3D 的官方数据结构 `ViewImage` 同时支持 `ViewImageUrl` 与 **`ViewImageBase64`**，但 WorkBuddy 内置脚本只封装了前者。本技能用 `importlib` 加载内置脚本模块，直接复用其 TC3 签名与轮询逻辑、自由构造请求体，从而绕开"必须先上传图床"的限制。
+- 多视角输入让背面发型、服装背面、侧面轮廓按图纸还原，是 3D 手办 / 数字资产（如 MakerWorld 作品）生产管线的关键一环。
+
+## ❓ FAQ
+
+**Q: 没有三视图，只有一张普通照片可以吗？**
+可以，`--front` 单图即可跑（单图模式），只是背面细节由模型推断。
+
+**Q: 视角图必须是"标准三视图排版"吗？**
+不需要，API 收的是一张张独立图片；整图排版只是方便一次截图后裁剪。
+
+**Q: 费用怎么算？**
+实测 3.1 版：Normal 20 点 + MultiView 10 点 + PBR 10 点 = 40 点/次；单图 30 点/次。
+
+**Q: 支持 Linux / macOS 吗？**
+脚本本身跨平台（纯 Python）；`SKILL.md` 中的路径示例以 WorkBuddy Desktop Windows 环境为准，其他平台改一下 `buddy-cloud.py` 路径即可（也可用环境变量 `BUDDY_CLOUD_SCRIPT` 覆盖）。
+
+## 📁 目录结构
+
+```
+hunyuan-3d-multiview/
+├── SKILL.md                       # 技能清单（工作流 + 参数速查 + 环境坑）
+├── scripts/
+│   └── multiview_3d_driver.py     # 多视角生成驱动（token 走 stdin）
+└── assets/                        # 示例输入视图与生成结果预览
+```
+
+## 🏷️ 关键词
+
+`腾讯混元` `Hunyuan3D` `图生3D` `image-to-3d` `multi-view 3D generation` `3D 手办` `figurine` `GLB` `OBJ` `PBR` `model-viewer` `WorkBuddy` `agent skill` `AI 3D` `三视图建模` `3D printing` `MakerWorld`
+
+## 📄 License
+
+[MIT](LICENSE)
