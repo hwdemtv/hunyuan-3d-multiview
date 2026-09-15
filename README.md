@@ -36,16 +36,33 @@
 - WorkBuddy Desktop（提供 `connect_cloud_service` 临时凭证与 `buddy-cloud.py` 签名通道）
 - 一个三视图 / 多视角图片（正 / 后 / 左各占约 1/3 宽度，白底最佳）
 
-### 2. 安装技能
+### 2. 安装技能（三选一，前两种一步到位）
 
-把本仓库的 `SKILL.md` 与 `scripts/` 复制到技能目录：
+**方式 A · 一行命令安装（推荐）**
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/hwdemtv/hunyuan-3d-multiview/main/install.ps1 | iex
+```
+
+macOS / Linux：
 
 ```bash
-# 用户级（跨项目可用）
-mkdir -p ~/.workbuddy/skills/hunyuan-3d-multiview
-cp SKILL.md ~/.workbuddy/skills/hunyuan-3d-multiview/
-cp -r scripts ~/.workbuddy/skills/hunyuan-3d-multiview/
+curl -fsSL https://raw.githubusercontent.com/hwdemtv/hunyuan-3d-multiview/main/install.sh | bash
 ```
+
+**方式 B · 直接把仓库地址丢给 WorkBuddy**
+
+在 WorkBuddy 对话中发送：
+
+> 安装技能：https://github.com/hwdemtv/hunyuan-3d-multiview
+
+WorkBuddy 会读取仓库、审计技能安全后自动装入 `~/.workbuddy/skills/hunyuan-3d-multiview/`。
+
+**方式 C · 手动复制**
+
+把本仓库的 `SKILL.md` 与 `scripts/` 复制到 `~/.workbuddy/skills/hunyuan-3d-multiview/`（Windows 为 `%USERPROFILE%\.workbuddy\skills\hunyuan-3d-multiview\`）。
 
 ### 3. 裁剪视角图
 
