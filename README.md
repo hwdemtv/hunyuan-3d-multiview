@@ -64,9 +64,26 @@ WorkBuddy 会读取仓库、审计技能安全后自动装入 `~/.workbuddy/skil
 
 把本仓库的 `SKILL.md` 与 `scripts/` 复制到 `~/.workbuddy/skills/hunyuan-3d-multiview/`（Windows 为 `%USERPROFILE%\.workbuddy\skills\hunyuan-3d-multiview\`）。
 
-### 3. 裁剪视角图
+### 3. 裁剪 + 标准化视角图
 
-从整张三视图里按 1/3 宽度裁出 `front` / `back` / `left`（去掉底部文字标注），用 PIL 存为 jpg（quality 92，单边 ≥128px，多视角 base64 总和 ≤6MB），放到 `.hy3d/inputs/`。
+先按 1/3 宽度裁出 `front` / `back` / `left`（去掉底部文字标注），再用自带脚本做一次标准化——**主体 bbox 裁掉空白 → 贴回白色正方形画布 → 主体较长边占 70% 且居中**：
+
+```bash
+python scripts/prep_views.py --front view_front.jpg --back view_back.jpg --left view_left.jpg \
+  --out-dir .hy3d/inputs
+```
+
+实测这一步是值得的（同一角色、同为 3.1 + PBR、各 40 点，A/B 见下）。存为 jpg（quality 92，单边 ≥128px，多视角 base64 总和 ≤6MB）。
+
+![输入质量 A/B：旧裁切 vs 标准化裁切](assets/ab-compare.png)
+
+| | A 旧裁切（三等分直裁） | B 标准化裁切（bbox + 白方画布 70%） |
+|---|---|---|
+| `check` 质量提示 | 2 条（背景不纯） | 0 条 |
+| 顶点 / 三角面 | 328,955 / 497,654 | 323,993 / 481,508 |
+| 主观评价 | 可用 | **更好** |
+
+注意：B 面数**更低**却更好看——收益来自"主体居中 + 纯背景"带来的重建精度，不是堆面数，别靠调高 `--face-count` 提质量。
 
 ### 4. 生成（任务文件状态机：可续跑、不重复付费）
 
@@ -122,7 +139,8 @@ hunyuan-3d-multiview/
 │   ├── api-params.md              # 参数/视角/费用/校验规则/成本档位
 │   └── env-pitfalls.md            # Windows / WorkBuddy 环境坑
 ├── scripts/
-│   └── multiview_3d_driver.py     # init / check / submit / collect / run
+│   ├── multiview_3d_driver.py     # init / check / submit / collect / run
+│   └── prep_views.py              # 视角图标准化（bbox 裁切 + 白色方画布）
 ├── install.ps1  install.sh        # 一行安装
 ├── CONTRIBUTING.md                # 提交改动需附真实生成结果
 └── assets/                        # 示例输入视图与生成结果预览

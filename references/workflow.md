@@ -17,9 +17,34 @@
 ## 1. 准备视角图
 
 - 从整张三视图按 1/3 宽度裁出 front / back / left（去掉底部文字标注），jpg quality 92
+- **再做一次标准化裁剪（实测有效，见 `api-params.md` 的 A/B）**：取主体 bbox 裁掉空白 → 贴回白色正方形画布 → 主体较长边占 70% 且居中
 - 质量检查（清单见 `api-params.md`）：单体、纯色背景、主体占画面 >50%、无文字、三视图比例一致
 - 脚本的 `check` 会给出 `hints`（背景是否纯色、主体占比），属软提示，按提示优化即可
 - 存到 `.hy3d/inputs/`，然后登记：
+
+标准化裁剪核心片段（Pillow）：
+
+```python
+from PIL import Image
+TARGET_RATIO = 0.70          # 主体较长边占画布比例
+
+bg = 235                      # min(R,G,B) >= 235 视为背景
+im = Image.open(src).convert("RGB")
+w, h = im.size
+px = im.resize((64, 64)).load()
+xs = [x for x in range(64) for y in range(64) if min(px[x, y]) < bg]
+ys = [y for y in range(64) for x in range(64) if min(px[x, y]) < bg]
+subj = im.crop((min(xs) * w // 64, min(ys) * h // 64,
+                (max(xs) + 1) * w // 64, (max(ys) + 1) * h // 64))
+
+sw, sh = subj.size
+side = min(max(int(max(sw, sh) / TARGET_RATIO), 512), 1024)
+canvas = Image.new("RGB", (side, side), "white")
+scale = min(side * TARGET_RATIO / sw, side * TARGET_RATIO / sh)
+subj = subj.resize((int(sw * scale), int(sh * scale)), Image.LANCZOS)
+canvas.paste(subj, ((side - subj.width) // 2, (side - subj.height) // 2))
+canvas.save(dst, quality=92)
+```
 
 ```bash
 python scripts/multiview_3d_driver.py init \

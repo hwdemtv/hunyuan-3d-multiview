@@ -158,6 +158,13 @@ def resolve_path(rel, base):
     return os.path.join(base, rel)
 
 
+def resolve_jobs_file(args):
+    """Honour both `--jobs-file X` and the positional `X` form."""
+    if getattr(args, "jobs_path", None):
+        args.jobs_file = args.jobs_path
+    return args.jobs_file
+
+
 def read_jobs(path):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
@@ -216,11 +223,25 @@ def image_quality_hints(path):
             if std > 40:
                 hints.append("background is not uniform; a plain background improves reconstruction")
             small = im.resize((64, 64)).load()
-            subject = sum(1 for x in range(64) for y in range(64)
-                          if sum((small[x, y][i] - mean[i]) ** 2 for i in range(3)) ** 0.5 > 45)
+
+            def is_subject(x, y):
+                return sum((small[x, y][i] - mean[i]) ** 2 for i in range(3)) ** 0.5 > 45
+
+            subject = sum(1 for x in range(64) for y in range(64) if is_subject(x, y))
+            if subject == 0:
+                hints.append("no subject detected: the frame looks empty or fully uniform")
+            else:
+                # Measure the subject's bounding-box SPAN, not its ink coverage.
+                # A slim figurine legitimately covers only ~15% of a square
+                # frame while spanning 70% of its height -- coverage would
+                # raise a false alarm here.
+                xs = [x for x in range(64) if any(is_subject(x, y) for y in range(64))]
+                ys = [y for y in range(64) if any(is_subject(x, y) for x in range(64))]
+                span = max(len(xs), len(ys)) / 64
+                if span < 0.5:
+                    hints.append(f"subject spans only ~{span:.0%} of the frame "
+                                 f"(longer side); aim for >50%")
             ratio = subject / (64 * 64)
-            if ratio < 0.5:
-                hints.append(f"subject occupies ~{ratio:.0%} of the frame; aim for >50%")
             if ratio > 0.95:
                 hints.append("subject may be cropped by the frame edge")
     except ImportError:
@@ -313,6 +334,7 @@ def build_body(job, base):
 # --------------------------------------------------------------------------
 
 def cmd_init(args):
+    resolve_jobs_file(args)
     views = {k: v for k, v in (("front", args.front), ("back", args.back),
                                ("left", args.left), ("right", args.right),
                                ("top", args.top), ("bottom", args.bottom),
@@ -340,6 +362,7 @@ def cmd_init(args):
 
 
 def cmd_check(args):
+    resolve_jobs_file(args)
     data = read_jobs(args.jobs_file)
     base = os.path.dirname(os.path.abspath(args.jobs_file))
     report = []
@@ -355,6 +378,7 @@ def cmd_check(args):
 
 
 def cmd_submit(args):
+    resolve_jobs_file(args)
     token = get_token()
     data = read_jobs(args.jobs_file)
     base = os.path.dirname(os.path.abspath(args.jobs_file))
@@ -455,6 +479,7 @@ def reuse_downloads(job, output_dir):
 
 
 def cmd_collect(args):
+    resolve_jobs_file(args)
     data = read_jobs(args.jobs_file)
     os.makedirs(args.output_dir, exist_ok=True)
     api = {}
@@ -602,6 +627,9 @@ def build_parser():
 
     def common(sp):
         sp.add_argument("--jobs-file", default=DEFAULT_JOBS_FILE)
+        # positional form so the documented `check .hy3d/jobs.json` works too
+        sp.add_argument("jobs_path", nargs="?", metavar="JOBS_FILE",
+                        help="path to jobs.json (same as --jobs-file)")
         # Accepted (and effectively required for network subcommands) so the
         # documented recipes work verbatim. The token itself is never an argv
         # value -- it is read from stdin, because Windows caps argv at ~32k

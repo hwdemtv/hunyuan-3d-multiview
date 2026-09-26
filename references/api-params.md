@@ -59,11 +59,28 @@
 5. 光照均匀、不过曝不过暗；三视图的**比例与高度一致**（脚底/头顶对齐）
 6. 三视图建议同一白底、同一画幅；裁剪时去掉底部"正视图"之类的文字
 
+**预处理默认值**：bbox 裁出主体 → 贴回白色正方形画布 → 主体较长边占 70% 且居中（裁剪代码见 workflow.md 第 1 节）。
+
+### 实测 A/B（同一角色，同为 3.1 + PBR，各 40 点）
+
+| | A 旧裁切（三等分直裁，背景不纯、主体占比小） | B 新裁切（bbox + 白方画布 70%） |
+|---|---|---|
+| `check` 质量提示 | 2 条 | 0 条 |
+| 顶点 / 三角面 | 328,955 / 497,654 | 323,993 / 481,508 |
+| GLB 体积 | 48.1 MB | 48.7 MB |
+| 主观评价 | 可用 | **更好** |
+
+两点结论：
+
+1. **面数不等于质量**：B 面数略低但观感更好，收益来自"主体居中 + 纯背景"带来的重建精度，不是堆面数。不要为了提质量去调高 `--face-count`。
+2. 混元对"不完美输入"兜底良好——A 仍能出可用模型；追求稳定出片才需要走预处理。
+
 ## 已验证配方（可直接复制）
 
 ```bash
+# 0. 预处理：bbox 裁主体 + 白色方画布（主体占 70%），见 workflow.md
 # A. 三视图手办（推荐）
-python scripts/multiview_3d_driver.py init --front f.jpg --back b.jpg --left l.jpg
+python scripts/multiview_3d_driver.py init --front .hy3d/inputs/front.jpg --back .hy3d/inputs/back.jpg --left .hy3d/inputs/left.jpg
 # B. 单图快速验证
 python scripts/multiview_3d_driver.py init --front f.jpg --no-pbr
 # C. 白模（只要几何，准备打印检查）
