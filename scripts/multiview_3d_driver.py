@@ -21,6 +21,7 @@ Usage
 
 import argparse
 import base64
+import glob
 import importlib.util
 import json
 import os
@@ -29,12 +30,51 @@ import sys
 import time
 import urllib.request
 
-BUDDY_CLOUD_SCRIPT = os.environ.get(
-    "BUDDY_CLOUD_SCRIPT",
-    r"C:\Users\hwdem\AppData\Local\Programs\WorkBuddy\resources\app.asar.unpacked"
-    r"\resources\plugins\workbuddy-builtin\skills\buddy-multimodal-generation"
-    r"\scripts\buddy-cloud.py",
-)
+_WORKBUDDY_SKILLS_ROOTS = [
+    os.path.join(os.path.expanduser("~"), "AppData", "Local", "Programs", "WorkBuddy",
+                 "resources", "app.asar.unpacked", "resources", "plugins",
+                 "workbuddy-builtin", "skills"),
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."),
+]
+# Upstream renamed this file before (buddy-cloud.py ->
+# buddy-multimodal-generation.py). Probe, never hardcode a single path.
+_BUILTIN_CANDIDATES = [
+    ("buddy-multimodal-generation", "buddy-multimodal-generation.py"),
+    ("buddy-multimodal-generation", "buddy-cloud.py"),
+    ("buddy-cloud", "buddy-cloud.py"),
+    ("miora-image-generation", "buddy-cloud.py"),
+    ("buddy-image-processing", "buddy-cloud.py"),
+]
+
+
+def _script_has_3d(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            head = f.read(400000)
+    except OSError:
+        return False
+    return "_PROVIDER_MAP" in head and '"3d"' in head
+
+
+def find_builtin_script():
+    """Locate the WorkBuddy builtin multimodal script that signs the tcproxy call."""
+    env = os.environ.get("BUDDY_CLOUD_SCRIPT")
+    if env and os.path.exists(env):
+        return env
+    for root in _WORKBUDDY_SKILLS_ROOTS:
+        for sub, name in _BUILTIN_CANDIDATES:
+            p = os.path.join(root, sub, "scripts", name)
+            if os.path.exists(p):
+                return p
+        hits = sorted(glob.glob(os.path.join(root, "*", "scripts", "*.py")))
+        for p in hits:
+            if _script_has_3d(p):
+                return p
+    return os.path.join(_WORKBUDDY_SKILLS_ROOTS[0], "buddy-multimodal-generation",
+                        "scripts", "buddy-multimodal-generation.py")
+
+
+BUDDY_CLOUD_SCRIPT = find_builtin_script()
 
 DEFAULT_JOBS_FILE = os.path.join(".hy3d", "jobs.json")
 DEFAULT_OUTPUT_DIR = os.path.join(".hy3d", "outputs")
@@ -376,14 +416,63 @@ def download(url, dest):
     return os.path.getsize(dest)
 
 
+def write_viewer(path, glb_name):
+    """Fill the preview template.
+
+    Plain str.replace, NOT str.format: the template carries a CSS block
+    (`body { margin: 0; ... }`) whose braces would crash .format() with
+    KeyError: 'margin'.
+    """
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(VIEWER_TMPL.replace("{glb}", glb_name))
+
+
+def reuse_downloads(job, output_dir):
+    """Return already-downloaded artifacts for this job, or None.
+
+    Keeps collect idempotent: a partially failed run (e.g. viewer write
+    crashed) must not re-download 50 MB just to retry the last step.
+    """
+    saved = job.get("downloaded")
+    if isinstance(saved, dict) and all(os.path.exists(p) for p in saved.values()):
+        return saved
+    pattern = os.path.join(output_dir, f"{job.get('id')}_*")
+    hits = sorted(glob.glob(pattern + ".glb"), reverse=True)
+    if not hits:
+        return None
+    stem = hits[0][:-4]
+    found = {"glb": hits[0]}
+    for suffix, key in (("_preview.png", "preview"), ("_viewer.html", "viewer")):
+        p = stem + suffix
+        if os.path.exists(p):
+            found[key] = p
+    # viewer written before the fix may be missing; regenerate it
+    if "viewer" not in found:
+        vp = stem + "_viewer.html"
+        write_viewer(vp, os.path.basename(hits[0]))
+        found["viewer"] = vp
+    return found
+
+
 def cmd_collect(args):
-    token = get_token()
     data = read_jobs(args.jobs_file)
-    mod = load_module(BUDDY_CLOUD_SCRIPT)
-    mod._ACTIVE_TOKEN = token
-    cfg = mod._PROVIDER_MAP["3d"]
-    endpoint = mod._DEFAULT_ENDPOINT
     os.makedirs(args.output_dir, exist_ok=True)
+    api = {}
+
+    def load_api():
+        """Load the builtin signer lazily.
+
+        Reusing artifacts that are already on disk must not require a token
+        or even the builtin script to be present.
+        """
+        if not api:
+            token = get_token()
+            mod = load_module(BUDDY_CLOUD_SCRIPT)
+            mod._ACTIVE_TOKEN = token
+            api.update(token=token, mod=mod,
+                       cfg=mod._PROVIDER_MAP["3d"],
+                       endpoint=mod._DEFAULT_ENDPOINT)
+        return api
 
     with JobLock(args.jobs_file):
         report = []
@@ -392,11 +481,30 @@ def cmd_collect(args):
             pending = False
             for job in data["jobs"]:
                 if not job.get("job_id") or job.get("state") == "downloaded":
+                    # a successful run must not keep a stale error on record
+                    if job.get("state") == "downloaded" and job.get("error_stage"):
+                        job.pop("error_stage", None)
+                        job.pop("error", None)
+                        write_jobs(args.jobs_file, data)
                     continue
+                # offline fast path: results already fetched, files already on disk
+                if job.get("result_files") and args.download and not args.force_download:
+                    reused = reuse_downloads(job, args.output_dir)
+                    if reused:
+                        job["downloaded"] = reused
+                        job["state"] = "downloaded"
+                        job.pop("error_stage", None)
+                        job.pop("error", None)
+                        write_jobs(args.jobs_file, data)
+                        report.append({"id": job.get("id"), "state": "DONE",
+                                       "saved": reused, "reused": True})
+                        continue
                 try:
-                    result = mod._call_api(endpoint, cfg["provider"], cfg["service"],
-                                           cfg["version"], cfg["query_action"],
-                                           {"JobId": job["job_id"]}, token)
+                    a = load_api()
+                    result = a["mod"]._call_api(a["endpoint"], a["cfg"]["provider"],
+                                                a["cfg"]["service"], a["cfg"]["version"],
+                                                a["cfg"]["query_action"],
+                                                {"JobId": job["job_id"]}, a["token"])
                 except SystemExit:
                     job["error_stage"] = "query-error"
                     job["error"] = "Status query failed; keep job_id and retry collect."
@@ -408,7 +516,8 @@ def cmd_collect(args):
                 job["checked_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
                 if status == "FAIL":
                     job["error_stage"] = "result-error"
-                    job["error"] = sanitize(result.get("ErrorMessage", "Generation failed."), token)
+                    job["error"] = sanitize(result.get("ErrorMessage", "Generation failed."),
+                                            api.get("token", ""))
                     write_jobs(args.jobs_file, data)
                     report.append({"id": job.get("id"), "state": "FAIL",
                                    "error_stage": "result-error", "error": job["error"]})
@@ -432,30 +541,37 @@ def cmd_collect(args):
                 entry = {"id": job.get("id"), "state": "DONE", "files": files}
                 if args.download:
                     try:
-                        stamp = time.strftime("%Y%m%d_%H%M%S")
-                        saved = {}
-                        glb = next((f for f in files if f["type"] == "glb"), None)
-                        prev = next((f for f in files if f.get("preview_image_url")), None)
-                        if glb:
-                            p = os.path.join(args.output_dir, f"{job['id']}_{stamp}.glb")
-                            download(glb["url"], p)
-                            saved["glb"] = p
-                        if prev:
-                            p = os.path.join(args.output_dir, f"{job['id']}_{stamp}_preview.png")
-                            download(prev["preview_image_url"], p)
-                            saved["preview"] = p
-                        if saved.get("glb"):
-                            vp = os.path.join(args.output_dir, f"{job['id']}_{stamp}_viewer.html")
-                            with open(vp, "w", encoding="utf-8") as f:
-                                f.write(VIEWER_TMPL.format(glb=os.path.basename(saved["glb"])))
-                            saved["viewer"] = vp
+                        saved = reuse_downloads(job, args.output_dir)
+                        if saved and not args.force_download:
+                            entry["saved"] = saved
+                            entry["reused"] = True
+                        else:
+                            stamp = time.strftime("%Y%m%d_%H%M%S")
+                            saved = {}
+                            glb = next((f for f in files if f["type"] == "glb"), None)
+                            prev = next((f for f in files if f.get("preview_image_url")), None)
+                            if glb:
+                                p = os.path.join(args.output_dir, f"{job['id']}_{stamp}.glb")
+                                download(glb["url"], p)
+                                saved["glb"] = p
+                            if prev:
+                                p = os.path.join(args.output_dir, f"{job['id']}_{stamp}_preview.png")
+                                download(prev["preview_image_url"], p)
+                                saved["preview"] = p
+                            if saved.get("glb"):
+                                vp = os.path.join(args.output_dir, f"{job['id']}_{stamp}_viewer.html")
+                                write_viewer(vp, os.path.basename(saved["glb"]))
+                                saved["viewer"] = vp
                         job["downloaded"] = saved
                         job["state"] = "downloaded"
+                        job.pop("error_stage", None)
+                        job.pop("error", None)
                         write_jobs(args.jobs_file, data)
                         entry["saved"] = saved
                     except Exception as e:  # download-only failure: never regenerate
                         job["error_stage"] = "download-error"
-                        job["error"] = sanitize(e, token)
+                        job["error"] = sanitize(f"{type(e).__name__}: {e}",
+                                                api.get("token", ""))
                         write_jobs(args.jobs_file, data)
                         entry["error_stage"] = "download-error"
                         entry["error"] = job["error"]
@@ -486,6 +602,12 @@ def build_parser():
 
     def common(sp):
         sp.add_argument("--jobs-file", default=DEFAULT_JOBS_FILE)
+        # Accepted (and effectively required for network subcommands) so the
+        # documented recipes work verbatim. The token itself is never an argv
+        # value -- it is read from stdin, because Windows caps argv at ~32k
+        # chars and tokens must not land in shell history / process listings.
+        sp.add_argument("--token-stdin", action="store_true",
+                        help="read the temp token from stdin (always how it is read)")
         return sp
 
     ini = common(sub.add_parser("init", help="create/update the job file from view images"))
@@ -518,10 +640,13 @@ def build_parser():
     cl.add_argument("--poll-interval", type=int, default=10)
     cl.add_argument("--max-poll-time", type=int, default=600)
     cl.add_argument("--no-poll", action="store_true")
+    cl.add_argument("--force-download", action="store_true",
+                    help="re-download even if artifacts already exist (safe: no new credits)")
     cl.set_defaults(func=cmd_collect)
 
     rn = common(sub.add_parser("run", help="check -> submit -> collect --download"))
     rn.add_argument("--output-dir", default=DEFAULT_OUTPUT_DIR)
+    rn.add_argument("--force-download", action="store_true")
     rn.add_argument("--poll-interval", type=int, default=10)
     rn.add_argument("--max-poll-time", type=int, default=600)
     rn.add_argument("--force-retry", action="store_true")

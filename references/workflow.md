@@ -88,7 +88,7 @@ echo -n "<tempToken>" | python scripts/multiview_3d_driver.py collect .hy3d/jobs
 | `submission-uncertain` / `submitting` | 是否已受理未知 | **禁止自动重提**。先 `collect` 核对；确需重提须显式 `--force-retry`，并接受可能二次计费 |
 | `query-error` | 查状态失败（网络/API） | 原样重试 `collect`，job_id 不变 |
 | `result-error` | 任务结束但取结果失败或为空 | 用同一 job_id 重跑 `collect`；仍失败才考虑新建任务（新 id） |
-| `download-error` | 结果已生成但下载失败 | 只重下（用 jobs.json 里保存的 url），**绝不重新生成** |
+| `download-error` | 结果已生成但下载失败 | 只重下（用 jobs.json 里保存的 url），**绝不重新生成**。已落盘的产物会被 `collect` 自动复用（幂等），补齐缺失的 viewer；确要整批重下加 `--force-download`（免费，不产生新计费） |
 | URL 过期 | COS 签名 24h 失效 | 重新 `collect` 取新签名链接 |
 
 ## 7. 退出条件
