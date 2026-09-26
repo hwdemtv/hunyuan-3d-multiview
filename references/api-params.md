@@ -1,7 +1,10 @@
 # API 参数与成本（实测 2026-09，模型 3.1）
 
 > 仅在报错提示契约变更、或要换模型时再查官方文档；不要每次运行都重新检索。
-> 官方：SubmitHunyuanTo3DProJob 文档 / ViewImage 数据结构（含 `ViewImageBase64` 字段）。
+
+- 提交任务接口：`SubmitHunyuanTo3DProJob` — https://cloud.tencent.com/document/product/248/123447
+- 数据结构 `ViewImage`（含 `ViewImageBase64`）：https://cloud.tencent.com/document/api/1804/120828
+- 国际站同接口说明：https://intl.cloud.tencent.com/zh/document/api/1284/75540
 
 ## 请求体（驱动脚本自动构造）
 
@@ -33,10 +36,28 @@
 
 ## 参数校验（脚本 `check` 已实现）
 
+硬校验（返回 `invalid-params` / `invalid-image`，阻断提交）：
+
 - model 必须 3.0/3.1；face_count 整数且 3000–1500000
+- **model 3.1 不支持 `LowPoly` / `Sketch`**（要低模用 3.0）
+- `Geometry` 时不允许 pbr=true（白模无贴图，EnablePBR 无效）
 - front 必填；视角数 ≤8；3.1 专属视角需 model=3.1
 - 图片存在性、magic bytes（png/jpg/webp）、体积 ≤6MB、分辨率 128–5000
 - base64 总量 ≤6MB
+
+软提示（`hints`，不阻断）：
+
+- 背景不够纯色（边框取样标准差 >40）
+- 主体占画面 <50% 或疑似被裁切（>95%）
+
+## 输入图质量清单（提交前逐条核对）
+
+1. 画面里只有**一个主体**，无杂物、无第二个角色
+2. 背景**纯色**（白/浅灰最佳），不要实景、渐变、花纹
+3. 主体占画面 **>50%**，四边留白但不出画
+4. 无文字标注、无水印、无 UI 元素
+5. 光照均匀、不过曝不过暗；三视图的**比例与高度一致**（脚底/头顶对齐）
+6. 三视图建议同一白底、同一画幅；裁剪时去掉底部"正视图"之类的文字
 
 ## 已验证配方（可直接复制）
 

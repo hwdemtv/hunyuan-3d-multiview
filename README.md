@@ -106,6 +106,9 @@ echo -n "<tempToken>" | python scripts/multiview_3d_driver.py collect .hy3d/jobs
 **Q: 费用怎么算？**
 实测 3.1 版：Normal 20 点 + MultiView 10 点 + PBR 10 点 = 40 点/次；单图 30 点/次。
 
+**Q: 能在花钱之前先发现问题吗？**
+能。`check` 是离线的、不需要 token：校验图片格式/尺寸/体积/base64 总量、视角合法性、参数兼容性（如 model 3.1 不支持 LowPoly），并给出输入图质量提示（背景是否纯色、主体占比）。有问题退出码为 1。
+
 **Q: 支持 Linux / macOS 吗？**
 脚本本身跨平台（纯 Python）；`SKILL.md` 中的路径示例以 WorkBuddy Desktop Windows 环境为准，其他平台改一下 `buddy-cloud.py` 路径即可（也可用环境变量 `BUDDY_CLOUD_SCRIPT` 覆盖）。
 
@@ -121,6 +124,7 @@ hunyuan-3d-multiview/
 ├── scripts/
 │   └── multiview_3d_driver.py     # init / check / submit / collect / run
 ├── install.ps1  install.sh        # 一行安装
+├── CONTRIBUTING.md                # 提交改动需附真实生成结果
 └── assets/                        # 示例输入视图与生成结果预览
 ```
 

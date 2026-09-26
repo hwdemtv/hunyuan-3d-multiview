@@ -155,56 +155,96 @@ class JobLock:
 # offline validation
 # --------------------------------------------------------------------------
 
+def image_quality_hints(path):
+    """Cheap heuristics: solid background and subject ratio (advisory only)."""
+    hints = []
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            im = im.convert("RGB")
+            w, h = im.size
+            border = [im.getpixel((x, y))
+                      for x in range(0, w, max(1, w // 20))
+                      for y in (0, h - 1)]
+            border += [im.getpixel((x, y))
+                       for y in range(0, h, max(1, h // 20))
+                       for x in (0, w - 1)]
+            n = len(border)
+            mean = [sum(c[i] for c in border) / n for i in range(3)]
+            var = sum(sum((c[i] - mean[i]) ** 2 for i in range(3)) for c in border) / n
+            std = var ** 0.5
+            if std > 40:
+                hints.append("background is not uniform; a plain background improves reconstruction")
+            small = im.resize((64, 64)).load()
+            subject = sum(1 for x in range(64) for y in range(64)
+                          if sum((small[x, y][i] - mean[i]) ** 2 for i in range(3)) ** 0.5 > 45)
+            ratio = subject / (64 * 64)
+            if ratio < 0.5:
+                hints.append(f"subject occupies ~{ratio:.0%} of the frame; aim for >50%")
+            if ratio > 0.95:
+                hints.append("subject may be cropped by the frame edge")
+    except ImportError:
+        pass
+    return hints
+
+
 def validate_job(job, base, input_checks=True):
     if job.get("state") == "downloaded" or (job.get("job_id") and job.get("state") == "DONE".lower()):
-        return "already-submitted", None
+        return "already-submitted", None, []
     if job.get("job_id"):
-        return "submitted", None
+        return "submitted", None, []
     if job.get("state") in ("submitting", "submission-uncertain"):
-        return job["state"], None
+        return job["state"], None, []
     if not input_checks:
-        return "ready", None
+        return "ready", None, []
 
     if not job.get("id"):
-        return "invalid-params", "Each job needs an id."
+        return "invalid-params", "Each job needs an id.", []
     model = job.get("model", "3.1")
     if model not in ("3.0", "3.1"):
-        return "invalid-params", "model must be 3.0 or 3.1."
+        return "invalid-params", "model must be 3.0 or 3.1.", []
+    gtype = job.get("generate_type", "Normal")
+    if model == "3.1" and gtype in ("LowPoly", "Sketch"):
+        return "invalid-params", f"{gtype} is unavailable on model 3.1 (use 3.0).", []
+    if gtype == "Geometry" and job.get("pbr", True):
+        return "invalid-params", "Geometry ignores PBR; set pbr=false to avoid confusion.", []
     fc = job.get("face_count", 500000)
     if not (isinstance(fc, int) and 3000 <= fc <= 1500000):
-        return "invalid-params", "face_count must be an integer in 3000..1500000."
+        return "invalid-params", "face_count must be an integer in 3000..1500000.", []
     views = job.get("views") or {}
     if not views.get("front"):
-        return "invalid-params", "views.front is required (main image)."
+        return "invalid-params", "views.front is required (main image).", []
     for vt in VIEWS_31_ONLY:
         if views.get(vt) and model != "3.1":
-            return "invalid-params", f"{vt} requires model 3.1."
+            return "invalid-params", f"{vt} requires model 3.1.", []
     if len([v for v in views.values() if v]) > 8:
-        return "invalid-params", "At most 8 view images."
+        return "invalid-params", "At most 8 view images.", []
 
-    total = 0
+    hints, total = [], 0
     for vt, rel in views.items():
         if not rel:
             continue
         p = resolve_path(rel, base)
         if not os.path.exists(p):
-            return "waiting-for-image", f"{vt}: {rel} not found yet."
+            return "waiting-for-image", f"{vt}: {rel} not found yet.", hints
         data = open(p, "rb").read()
         if sniff_mime(data) is None:
-            return "invalid-image", f"{vt}: {rel} is not png/jpg/webp."
+            return "invalid-image", f"{vt}: {rel} is not png/jpg/webp.", hints
         if len(data) > MAX_FILE_BYTES:
-            return "invalid-image", f"{vt}: {rel} exceeds 6MB."
+            return "invalid-image", f"{vt}: {rel} exceeds 6MB.", hints
         try:
             from PIL import Image
             with Image.open(p) as im:
                 if max(im.size) < 128 or max(im.size) > 5000:
-                    return "invalid-image", f"{vt}: resolution {im.size} outside 128..5000."
+                    return "invalid-image", f"{vt}: resolution {im.size} outside 128..5000.", hints
         except ImportError:
             pass
+        for h in image_quality_hints(p):
+            hints.append(f"{vt}: {h}")
         total += len(base64.b64encode(data))
     if total > MAX_TOTAL_B64:
-        return "invalid-image", "Total base64 of view images exceeds 6MB."
-    return "ready", None
+        return "invalid-image", "Total base64 of view images exceeds 6MB.", hints
+    return "ready", None, hints
 
 
 def build_body(job, base):
@@ -264,8 +304,11 @@ def cmd_check(args):
     base = os.path.dirname(os.path.abspath(args.jobs_file))
     report = []
     for job in data["jobs"]:
-        state, err = validate_job(job, base)
-        report.append({"id": job.get("id"), "state": state, "error": err})
+        state, err, hints = validate_job(job, base)
+        entry = {"id": job.get("id"), "state": state, "error": err}
+        if hints:
+            entry["hints"] = hints
+        report.append(entry)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if any(r["state"].startswith("invalid") for r in report):
         sys.exit(1)
@@ -283,7 +326,7 @@ def cmd_submit(args):
     with JobLock(args.jobs_file):
         report = []
         for job in data["jobs"]:
-            state, err = validate_job(job, base)
+            state, err, hints = validate_job(job, base)
             if state == "submission-uncertain" and not args.force_retry:
                 report.append({"id": job.get("id"), "state": state,
                                "error": "Submission outcome unknown. Recover with collect, "
