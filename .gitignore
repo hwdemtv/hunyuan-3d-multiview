@@ -1,0 +1,4 @@
+.hy3d/
+__pycache__/
+*.pyc
+*.lock

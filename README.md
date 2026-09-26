@@ -66,23 +66,29 @@ WorkBuddy 会读取仓库、审计技能安全后自动装入 `~/.workbuddy/skil
 
 ### 3. 裁剪视角图
 
-从整张三视图里按 1/3 宽度裁出 `front` / `back` / `left`（去掉底部文字标注），用 PIL 存为 jpg（quality 92，单边 ≥128px，多视角 base64 总和 ≤6MB）。
+从整张三视图里按 1/3 宽度裁出 `front` / `back` / `left`（去掉底部文字标注），用 PIL 存为 jpg（quality 92，单边 ≥128px，多视角 base64 总和 ≤6MB），放到 `.hy3d/inputs/`。
 
-### 4. 一条命令生成
+### 4. 生成（任务文件状态机：可续跑、不重复付费）
 
 ```bash
-echo -n "<tempToken>" | python scripts/multiview_3d_driver.py \
-    --front view_front.jpg --back view_back.jpg --left view_left.jpg \
-    --model 3.1 --pbr
+# 登记任务
+python scripts/multiview_3d_driver.py init \
+  --front .hy3d/inputs/front.jpg --back .hy3d/inputs/back.jpg --left .hy3d/inputs/left.jpg
+
+# 离线自检：不花点数，先确认图片与参数没问题
+python scripts/multiview_3d_driver.py check .hy3d/jobs.json
+
+# 提交（token 走 stdin）
+echo -n "<tempToken>" | python scripts/multiview_3d_driver.py submit .hy3d/jobs.json
+
+# 轮询 + 下载 GLB/预览图 + 生成 model-viewer 预览页
+echo -n "<tempToken>" | python scripts/multiview_3d_driver.py collect .hy3d/jobs.json
 ```
 
-- `<tempToken>`：由 WorkBuddy 的 `connect_cloud_service` 工具返回（**不要**把 Token 写进命令行参数、环境变量或文件）
-- 输出 JSON：`job_id` / `status` / `credit_consumed` / `result_files`（glb、obj 的下载 URL 与预览图）
-- 生成期间脚本自动轮询；若中断可用 `buddy-cloud.py status <job_id> --type 3d` 续查，**不要重复提交**（同一请求最多重提 1 次）
-
-### 5. 下载 + 预览
-
-下载 `result_files` 中的 GLB 与 `preview_image_url`，再生成一个 `model-viewer` 预览页（`src` 用相对路径引用同目录 GLB），放在 WorkBuddy 内置预览或任意静态服务器即可 360° 查看。
+- `<tempToken>`：由 WorkBuddy 的 `connect_cloud_service` 工具返回（**不要**写进命令行参数、环境变量或文件）
+- 一条 `run` 可走完 check → submit → collect
+- 中间产物全部落在 `.hy3d/`（`jobs.json` 为唯一事实来源，已 gitignore），不污染工作区
+- 失败按错误分级恢复：`invalid-*` 改输入重试；`submission-uncertain` **禁止自动重提**（需显式 `--force-retry`）；`download-error` 只重下、不重新生成
 
 ## 🧠 为什么多视角 + Base64？
 
@@ -107,11 +113,18 @@ echo -n "<tempToken>" | python scripts/multiview_3d_driver.py \
 
 ```
 hunyuan-3d-multiview/
-├── SKILL.md                       # 技能清单（工作流 + 参数速查 + 环境坑）
+├── SKILL.md                       # 路由式入口：选模式 → 指向对应手册
+├── references/
+│   ├── workflow.md                # 步骤、.hy3d/jobs.json 结构、错误分级与恢复
+│   ├── api-params.md              # 参数/视角/费用/校验规则/成本档位
+│   └── env-pitfalls.md            # Windows / WorkBuddy 环境坑
 ├── scripts/
-│   └── multiview_3d_driver.py     # 多视角生成驱动（token 走 stdin）
+│   └── multiview_3d_driver.py     # init / check / submit / collect / run
+├── install.ps1  install.sh        # 一行安装
 └── assets/                        # 示例输入视图与生成结果预览
 ```
+
+运行期产物落在 `.hy3d/`（`jobs.json` + `outputs/`），已 gitignore。
 
 ## 🏷️ 关键词
 
