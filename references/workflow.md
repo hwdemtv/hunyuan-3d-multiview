@@ -120,3 +120,35 @@ echo -n "<tempToken>" | python scripts/multiview_3d_driver.py collect .hy3d/jobs
 
 - 单图约 3.5 分钟、多视角约 6 分钟；超过 600s 仍未 DONE：保留 job_id，隔几分钟再 `collect`，不要重提
 - 同一需求最多允许 1 次主动重新生成；第 2 次必须先向用户说明点数成本
+
+## 8. 生成之后的打印链路（可选，要出实体件时）
+
+GLB 交付不是终点。混元产物直接切片大概率翻车（UV 接缝拆点假开放边、单位、破洞），走 **打印闸门** 一条命令闭环：体检 → 自动修复（L1 轻修复保细节 / L2 体素保水密）→ 复检 → 报告。
+
+**闸门脚本在本技能 `scripts/print/` 里**（2026-09-27 合并，原 ai-3d-blender-pipeline）：
+
+```bash
+# 用 jobs.json 里 downloaded.glb 的实际路径；全程数分钟，放后台跑
+"C:/Users/hwdem/AppData/Local/Programs/Python/Python311/python.exe" \
+  "C:/Users/hwdem/.workbuddy/skills/hunyuan-3d-multiview/scripts/print/print_gate.py" \
+  --workspace <项目绝对路径>/.hy3d/gate \
+  --glb .hy3d/outputs/figure-01_xxx.glb --height 180 --autofix
+```
+
+判定与产物：`PASS/NEEDS_REVIEW/FAIL` + `.hy3d/gate/gate-out/gate-report.{json,md}`（各级前后对比表）。PASS 时 `final_file` 即可切片的 STL。
+
+### 路由决策（生成侧问题 vs 打印侧问题）
+
+| 现象 | 归属 | 动作 |
+|---|---|---|
+| 融合手指、五官穿插、悬空发束、左右不对称 | **生成侧** | 回第 1 步改输入/重新生成（闸门修不了解剖学） |
+| 破洞、非流形、单位、原点、碎块 | **打印侧** | `--autofix` 闭环处理（L1→L2） |
+| L2 体素后仍 FAIL | 双方都难救 | 隔离在 `failed/`，人工回 Blender 或重生成 |
+| 壁厚/悬垂数值 | 切片软件 | 本链不判，dfam-check 可出测量值 |
+
+### 必须记住的坑
+
+- **解释器必须是 Python 3.11**（上面的绝对路径就是）；3.13 跑内嵌的 stl-mesh-preflight 会报 `INPUT_CHANGED`
+- 预检硬限 3 万面/16MB，大模型走降面副本——**副本结论 ≠ 原件结论**，PASS 后可用 trimesh 对原件做秒级全量复核（`mesh.is_watertight`）
+- L2 体素会钝化细节、丢内部结构——PASS 带 caveat，上架前人工过目
+- 完整规则见 SKILL.md 段C 与 `references/print/pitfalls.md`、`references/print/inspection-prompt-mcp.md`（16+1 节视觉体检清单）

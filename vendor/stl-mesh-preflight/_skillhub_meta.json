@@ -1,0 +1,11 @@
+{
+  "name": "STL模型网格预检",
+  "installedAt": 1790470135820,
+  "source": "marketplace",
+  "version": "1.0.0",
+  "skillId": "skill_2099826131077754880",
+  "iconSource": "https://openplatform-cdn.codebuddy.cn/public/common/capability_cover/e8aebd2f-e63a-40f3-9bd1-29754f2ac294/0f9f4805-95a0-492e-b40e-dcdd71f04f40.png",
+  "installedContentHash": "sha256:22d083fe5d4f72191c7dfcab3097afdfd0f721d1942a3b630eb7b8864f7c3822",
+  "iconLocalPath": "C:\\Users\\hwdem\\.workbuddy\\skills\\stl-mesh-preflight\\_icon.png",
+  "iconDownloadedFrom": "https://openplatform-cdn.codebuddy.cn/public/common/capability_cover/e8aebd2f-e63a-40f3-9bd1-29754f2ac294/0f9f4805-95a0-492e-b40e-dcdd71f04f40.png"
+}

@@ -1,0 +1,2 @@
+Copyright 2026 Ethan Carter.
+Permission is granted to use this original tool locally for personal and commercial work, and to retain generated outputs. Provided without warranty of suitability, target application compatibility or color reproduction. No permission to imply official platform endorsement. Third-party data remains subject to its owner's rights.

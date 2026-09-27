@@ -3,7 +3,7 @@
 ## 执行环境
 
 1. **Git Bash shim 残缺**：沙箱 bash 缺 `tail`、`dirname`、`head`，`rm` 走 safe-bin 也会失败。 → 文件操作一律用 Python（`os.remove` / `shutil`），不要用 shell 工具。
-2. **managed venv 路径不存在**：`binaries/python/envs/default` 无效。 → 用 `C:/Users/hwdem/.workbuddy/binaries/python/versions/3.13.12/python.exe`。
+2. **managed venv 路径**：`binaries/python/envs/default` 现已存在（2026-09-27 建，含 trimesh/scipy）。生成链脚本对 3.11/3.13 均可；**但打印闸门（print_gate.py 内嵌的 stl-mesh-preflight）必须用系统 Python 3.11**：`C:/Users/hwdem/AppData/Local/Programs/Python/Python311/python.exe`——3.13 在 Windows 上 stat 不一致会报 `INPUT_CHANGED`。
 3. **命令行长度限制**：base64 作为 argv 传入会超 Windows 32767 字符。 → 脚本内部读文件编码，绝不把 base64 放命令行。
 4. **`--token-stdin` 必须显式传**：内置脚本读取 token 的开关由该参数控制，不传会报 TOKEN_NOT_CONFIGURED。driver 的所有子命令都接受该参数（token 本身只从 stdin 读入，绝不进 argv）。
 5. **内置脚本只能整文件 exec**：`python -c "exec(open(...).read())"` 可行但无法改请求体。 → 本技能用 `importlib` 加载模块后直调 `_call_api`，可自由构造 body。
